@@ -1,0 +1,5 @@
+rag_resume_venv
+out/*
+data/*
+__pycache__/
+.geminiignore
