@@ -1,5 +1,4 @@
-import os, requests, io
-from bs4 import BeautifulSoup
+import os, io
 from langchain.schema import Document
 from langchain_community.document_loaders import PyPDFLoader, TextLoader
 from PIL import Image
@@ -18,25 +17,6 @@ def load_local(data_dir="data"):
                 d.metadata.setdefault("source", os.path.basename(p))
                 docs.append(d)
     return docs
-
-def _parse_html(html_content: str) -> Document:
-    soup = BeautifulSoup(html_content, "html.parser")
-    title_el = soup.find(["h1","h2"])
-    parts = [title_el.get_text(" ", strip=True)] if title_el else []
-    for sel in ["p","li","div"]:
-        for el in soup.find_all(sel):
-            txt = el.get_text(" ", strip=True)
-            if txt and len(txt) > 40: parts.append(txt)
-    return Document(
-        page_content="\n".join(parts),
-        metadata={"source":"Job Description", "title": parts[0] if parts else "JD"}
-    )
-
-def scrape_jd(url: str) -> Document:
-    r = requests.get(url, timeout=20); r.raise_for_status()
-    doc = _parse_html(r.text)
-    doc.metadata["url"] = url
-    return doc
 
 def load_image(file_bytes: bytes, file_name: str) -> Document:
     try:
