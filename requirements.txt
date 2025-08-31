@@ -1,0 +1,11 @@
+
+langchain
+langchain-community
+langchain-ollama
+beautifulsoup4
+requests
+scikit-learn
+chromadb
+streamlit
+pillow
+pytesseract

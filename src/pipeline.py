@@ -1,61 +1,54 @@
 from langchain.schema import Document
-from langchain_ollama import ChatOllama
+from langchain_openai import ChatOpenAI
 from langchain.schema.runnable import RunnablePassthrough
 from langchain.schema.output_parser import StrOutputParser
-from .loader import load_local, scrape_jd
+from .loader import load_local
 from .splitter import chunk
-from .retrievers import build_bm25, build_chroma, build_hyde, build_ensemble
+from .retrievers import build_bm25, build_chroma, build_ensemble
 from .rerank import build_compressed_retriever
 from .prompt import ATS_PROMPT
 
 def make_context(docs):
-    blocks = []
-    for i, d in enumerate(docs, 1):
-        title = d.metadata.get("title") or d.metadata.get("source") or f"doc_{i}"
-        page  = d.metadata.get("page")
-        head  = f"[S{i}] {title}" + (f" | page {page}" if page is not None else "")
-        blocks.append(f"{head}\n{d.page_content}")
-    return "\n\n".join(blocks)
+    context = "\n\n".join(doc.page_content for doc in docs)
+    return context
 
-def sources_footer(docs):
-    lines = ["Sources:"]
-    for i, d in enumerate(docs,1):
-        title = d.metadata.get("title") or d.metadata.get("source") or f"doc_{i}"
-        page  = d.metadata.get("page")
-        url   = d.metadata.get("url")
-        tail  = [x for x in [d.metadata.get("source"), f"page {page}" if page is not None else None, url] if x]
-        lines.append(f"[S{i}] {title} → " + (" | ".join(tail) if tail else title))
-    return "\n".join(lines)
+def build_pipeline(jd_doc: Document, model="gpt-3.5-turbo", retriever_type="Ensemble", k=12, use_reranker=True, top_n=8):
+    resumes = chunk(load_local())
 
-def build_pipeline(resume_paths, jd_url, model="gemma3:4b"):
-    resumes = chunk(load_local(resume_paths))
-    jd_doc  = scrape_jd(jd_url)
-    jd_chunks = chunk([jd_doc])
+    all_chunks = resumes
 
-    all_chunks = resumes + jd_chunks
+    if retriever_type == "Ensemble":
+        semantic = build_chroma(all_chunks, k=k)
+        bm25 = build_bm25(all_chunks, k=k)
+        retriever = build_ensemble(bm25, semantic)
+    elif retriever_type == "BM25":
+        retriever = build_bm25(all_chunks, k=k)
+    elif retriever_type == "Chroma":
+        retriever = build_chroma(all_chunks, k=k)
+    else:
+        raise ValueError(f"Unknown retriever type: {retriever_type}")
 
-    semantic = build_chroma(all_chunks, k=12)
-    bm25 = build_bm25(all_chunks, k=12)
-    hyde = build_hyde(semantic, model=model)
-    ensemble = build_ensemble(bm25, semantic, hyde)
-    retriever = build_compressed_retriever(ensemble, top_n=8)
+    if use_reranker:
+        retriever = build_compressed_retriever(retriever, top_n=top_n)
 
-    llm = ChatOllama(model=model, temperature=0)
+    llm = ChatOpenAI(model=model, temperature=0)
 
     def answer_with(prompt):
         return ({"context": RunnablePassthrough()} | prompt | llm | StrOutputParser())
-
+    
     return {
         "retrieve": lambda q: retriever.get_relevant_documents(q),
-        "ats":       answer_with(ATS_PROMPT),
+        "ats": answer_with(ATS_PROMPT),
+        "jd_doc": jd_doc,
         # "cover":     answer_with(COVER_LETTER_PROMPT),
         # "email":     answer_with(EMAIL_PROMPT),
         # "dm":        answer_with(DM_PROMPT),
     }
 
 def generate_artifacts(p, question):
-    docs = p["retrieve"](question)
-    ctx  = make_context(docs) + "\n\n" + sources_footer(docs)
+    query = p.get("jd_doc", question)
+    docs = p["retrieve"](str(query))
+    ctx  = make_context(docs)
     return {
         "ats_resume": p["ats"].invoke(ctx),
         # "cover_letter": p["cover"].invoke(ctx),
